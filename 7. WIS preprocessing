@@ -1,0 +1,76 @@
+## preprocessing
+
+# Preparation for the training of the model
+X_train = train_data.drop(['action_vaso', 'subject_id', 'death'], axis=1)
+y_train = train_data['action_vaso']
+
+# Preparation for the test of the model
+X_test = test_data_copy.drop(['action_vaso', 'subject_id', 'death'], axis=1)
+
+X_test = X_test[X_train.columns]
+
+# Normalisation
+np.random.seed(0)
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+
+# Train the XGBoost
+xgb_model = XGBClassifier(n_estimators=100)
+
+xgb_model.fit(X_train_scaled, y_train)
+
+# Prediction on the test set
+y_pred = xgb_model.predict(X_test_scaled)
+y_prob = xgb_model.predict_proba(X_test_scaled)[:, 1]
+
+# Create a new df
+test_data_with_behavior_proba = test_data_copy.copy()
+
+# Add the XGB probabilities
+test_data_with_behavior_proba['proba_1'] = y_prob
+test_data_with_behavior_proba['proba_0'] = 1 - y_prob
+
+# Calculate proba_behavior acccording to the action really taken by the clinician
+test_data_with_behavior_proba['proba_behavior'] = test_data_with_behavior_proba.apply(
+    lambda x: x['proba_1'] if x['action_vaso'] == 1 else x['proba_0'],
+    axis=1
+)
+
+#Adjust proba_behavior after vasopressin introduction
+for subject_id in test_data_with_behavior_proba['subject_id'].unique():
+    vaso_introduced = False
+    for index, row in test_data_with_behavior_proba[test_data_with_behavior_proba['subject_id'] == subject_id].iterrows():
+        if vaso_introduced:
+            test_data_with_behavior_proba.at[index, 'proba_behavior'] = 1
+        if row['action_vaso'] == 1:
+            vaso_introduced = True
+
+print(test_data_with_behavior_proba[['subject_id', 'action_vaso', 'proba_0', 'proba_1', 'proba_behavior']])
+
+# We softened π1, so it now recommends taking the suggested action 99% for determinitic algo
+test_data_with_behavior_proba['proba_ai'] = np.where(
+    test_data_with_behavior_proba['optimal_action'] == test_data_with_behavior_proba['action_vaso'], 
+    0.99, 
+    0.01
+)
+
+# Vérification
+print(test_data_with_behavior_proba[['optimal_action', 'action_vaso', 'proba_ai']].head())
+
+
+test_data_with_behavior_proba['importance_ratio'] = test_data_with_behavior_proba['proba_ai'] / test_data_with_behavior_proba['proba_behavior']
+test_data_with_behavior_proba = calculate_corrected_future_averages(test_data_with_behavior_proba, hours=4, columns=['mbp','norepinephrine'])
+test_data_with_behavior_proba = calculate_corrected_future_averages(test_data_with_behavior_proba, hours=6, columns=['sofa','lactate'])
+test_data_with_behavior_proba['reward'] = calculate_adjusted_reward(test_data_with_behavior_proba, benefits)
+
+
+gamma = 0.99
+#reward = test_data_with_behavior_proba['reward'] = calculate_mortality_reward(test_data_with_behavior_proba)
+reward = calculate_adjusted_reward(test_data_with_behavior_proba, benefits)
+test_data_with_behavior_proba['importance_ratio'] = test_data_with_behavior_proba['proba_ai'] / test_data_with_behavior_proba['proba_behavior']
+test_data_with_behavior_proba['importance_ratio'] = test_data_with_behavior_proba['importance_ratio'].clip(lower=0.01, upper=10)
+
+print("Min importance_ratio après clipping:", test_data_with_behavior_proba['importance_ratio'].min())
+print("Max importance_ratio après clipping:", test_data_with_behavior_proba['importance_ratio'].max())
