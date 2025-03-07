@@ -1,0 +1,79 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import GroupShuffleSplit
+import pandas as pd
+
+# Parameters for FQI
+gamma_fqi = 0.99
+subject_id_col = 'subject_id'
+action_col = 'action_vaso'
+reward_col = 'reward'
+best_params = best_params
+
+validation_data_copy = validation_data.copy()
+validation_data_copy = calculate_corrected_future_averages(validation_data_copy, hours=4, columns=['mbp','norepinephrine'])
+validation_data_copy = calculate_corrected_future_averages(validation_data_copy, hours=6, columns=['sofa','lactate'])
+validation_data_copy['reward'] = calculate_adjusted_reward(validation_data_copy, benefits)
+validation_data_copy['reward'] = pd.to_numeric(validation_data_copy['reward'], errors='coerce')
+validation_data_copy['reward'].fillna(1, inplace=True)
+
+
+# List of n_iter to test
+n_iters = [100]
+
+best_n_iter = None
+best_performance_n_iter = -np.inf
+last_performance = None  # To store the performance of the last iteration
+mean_performances = []
+
+for n_iter in n_iters:
+    performances = []
+
+    # Initialisation
+    gss = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=n_iter)
+    groups = validation_data_copy[subject_id_col]
+
+    # Fold separation
+    for train_idx, test_idx in gss.split(validation_data_copy, groups=groups):
+        train_fold = validation_data_copy.iloc[train_idx].copy()
+        test_fold = validation_data_copy.iloc[test_idx].copy()
+
+        # Execute FQI in this fold
+        models, _ = run_fqi(
+            train_fold, best_params, n_iter, gamma_fqi,
+            subject_id_col, action_col, reward_col
+        )
+
+        # Evaluate the performance in the test fold
+        final_model = models[-1]  # Take the last iteration
+        features = ["time_hour", "norepinephrine", "mbp", "action_vaso", "ventil", "rrt", "death", "cortico", "fluid",
+                     "total_fluid", "uo_h", "bun", "creatinine", "lactate", "sofa"]
+
+        # Calculate the performance
+        fold_performance = (0.5 * np.mean(pred_q_1_test + pred_q_0_test)) + \
+                           (0.5 * np.mean(np.abs(pred_q_1_test - pred_q_0_test)))
+        performances.append(fold_performance)
+
+    # Calculate the mean performance for this n_iter
+    mean_performance = np.mean(performances)
+    mean_performances.append(mean_performance)
+
+    if last_performance is not None and mean_performance < last_performance + 1:
+    # If the improvement in performance is less than 1, stop the loop
+        break
+
+    # Check if this n_iter is the best
+    if mean_performance > best_performance_n_iter:
+        best_performance_n_iter = mean_performance
+        best_n_iter = n_iter
+
+print("Best n_iter:", best_n_iter)
+print("Best Performance with this n_iter:", best_performance_n_iter)
+
+# Plot the differents curves
+plt.plot(n_iters, mean_performances, marker='o')
+plt.xlabel('Number of iteration (n_iter)')
+plt.ylabel('Mean Performance')
+plt.title('Performance / n_iter')
+plt.grid(True)
+plt.show()
