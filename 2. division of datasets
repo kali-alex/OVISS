@@ -1,0 +1,15 @@
+unique_patient_keys = final_table1['subject_id'].unique()
+
+
+train_keys, temp_keys = train_test_split(unique_patient_keys, test_size=0.3, random_state=42)
+validation_keys, test_keys = train_test_split(temp_keys, test_size=0.5, random_state=42)
+
+
+train_data = final_table1[final_table1['subject_id'].isin(train_keys)]
+validation_data = final_table1[final_table1['subject_id'].isin(validation_keys)]
+test_data = final_table1[final_table1['subject_id'].isin(test_keys)]
+
+
+print(f"train_data : {train_data.shape}")
+print(f"validation_data : {validation_data.shape}")
+print(f"test_data : {test_data.shape}")
