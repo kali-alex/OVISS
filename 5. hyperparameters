@@ -1,0 +1,87 @@
+## set hyperparameters
+param_dist_xgb = {
+    'n_estimators': randint(50, 500),
+    'max_depth': randint(3, 12),
+    'learning_rate': uniform(0.01, 0.3),
+    'gamma': uniform(0, 2),
+    'subsample': uniform(0.5, 0.5),
+    'colsample_bytree': uniform(0.6, 0.4),
+    'min_child_weight': randint(1, 6),
+    'reg_alpha': uniform(0, 10),
+    'reg_lambda': uniform(0, 10)
+}
+
+n_iter_search = 500
+best_performance = -np.inf
+best_params = None
+
+
+## cross-validation
+unique_val_ids = validation_data['subject_id'].unique()
+n_splits = 5
+kf = KFold(n_splits=n_splits, shuffle=True, random_state=None)
+
+
+
+# Parameters for FQI
+n_iter_fqi = 1
+gamma_fqi = 0.99
+subject_id_col = 'subject_id'
+action_col = 'action_vaso'
+reward_col = 'reward'
+
+
+best_performance = -np.inf
+best_params = None
+
+for iteration in range(n_iter_search):
+    # Take a random combinaison of hyperparameters
+    random_params = {k: v.rvs() for k, v in param_dist_xgb.items()}
+
+    # To stock the performance of each combinaison
+    performances = []
+
+    # Divided the population for cross-validation
+    for train_index, test_index in kf.split(unique_val_ids):
+        val_train_ids = unique_val_ids[train_index]
+        val_test_ids = unique_val_ids[test_index]
+
+        # Create train and test_fold
+        train_fold = validation_data[validation_data[subject_id_col].isin(val_train_ids)].reset_index(drop=True)
+        test_fold = validation_data[validation_data[subject_id_col].isin(val_test_ids)].reset_index(drop=True)
+
+        # Calculate the reward
+        test_fold = calculate_corrected_future_averages(test_fold, hours=4, columns=['mbp','norepinephrine'])
+        train_fold = calculate_corrected_future_averages(train_fold, hours=4, columns=['mbp','norepinephrine'])
+        test_fold = calculate_corrected_future_averages(test_fold, hours=6, columns=['sofa','lactate'])
+        train_fold = calculate_corrected_future_averages(train_fold, hours=6, columns=['sofa','lactate'])
+
+        train_fold['reward'] = calculate_adjusted_reward(train_fold, benefits)
+        test_fold['reward'] = calculate_adjusted_reward(test_fold, benefits)
+
+        # execute the FQI
+        models, _ = run_fqi(
+            train_fold, random_params, n_iter_fqi, gamma_fqi,
+            subject_id_col, action_col, reward_col
+        )
+
+        # Evaluate the performance on the test fold
+        final_model = models[-1]  # Take the model of the last iteration
+        features = ["time_hour", "norepinephrine", "mbp", "action_vaso", "ventil", "rrt", "death", "cortico", "fluid",
+                     "total_fluid", "uo_h", "bun", "creatinine", "lactate", "sofa"]
+
+        # Calculate the performance (mixt between max of diff and max of reward for safety and efficacity)
+        fold_performance = (0.5 * np.mean(pred_q_1_test + pred_q_0_test)) + \
+                   (0.5 * np.mean(np.abs(pred_q_1_test - pred_q_0_test)))
+        performances.append(fold_performance)
+
+    # Calculate the mean performance for this combinaison of hyperparameters
+    mean_performance = np.mean(performances)
+
+    # Check if this combinaison is the best
+    if mean_performance > best_performance:
+        best_performance = mean_performance
+        best_params = random_params
+
+print("Best hyperparameters:", best_params)
+print("Best performance:", best_performance)
