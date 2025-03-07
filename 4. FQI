@@ -1,0 +1,41 @@
+def run_fqi(train_data, hyperparams, n_iter, gamma_fqi=0.99, subject_id_col='subject_id',
+            action_col='action_vaso', reward_col='reward', start_iter=0, initial_models=None, initial_curr_q_values=None):
+    if initial_models is not None:
+        models = initial_models
+    else:
+        models = []
+
+    if initial_curr_q_values is not None:
+        curr_q_values = initial_curr_q_values
+    else:
+        curr_q_values = pd.Series(0, index=train_data.index, dtype=float)
+
+
+    features = ["time_hour", "norepinephrine", "mbp", "action_vaso", "ventil", "rrt", "death", "cortico", "fluid",
+                     "total_fluid", "uo_h", "bun", "creatinine", "lactate", "sofa"]
+                     # "action_vaso" is the action really taken by the clinician
+
+    for i in range(start_iter, start_iter + n_iter):
+        print(f"Starting iteration {i+1}/{start_iter + n_iter}")
+        y = pd.Series(0, index=train_data.index, dtype=float)
+
+        #  Prepare FQI training data
+
+        model.fit(train_data[features], y)  # train the model
+        curr_q_values = pd.Series(model.predict(train_data[features]), index=train_data.index, dtype=float)  # Update Q values
+
+        models.append(model)
+
+    return models, curr_q_values
+
+
+# Save models
+def save_state(models, curr_q_values, filename="fqi_state.pkl"):
+    with open(filename, "wb") as f:
+        pickle.dump((models, curr_q_values), f)
+
+# Load models
+def load_state(filename="fqi_state.pkl"):
+    with open(filename, "rb") as f:
+        models, curr_q_values = pickle.load(f)
+    return models, curr_q_values
