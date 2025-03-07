@@ -1,0 +1,119 @@
+def calculate_wis_ai_per_patient(df, gamma, reward):
+    df_copy = df.copy()
+
+    # Calculate cumulative product of importance ratios for each step within each patient trajectory
+    df_copy['cumulative_importance'] = df_copy.groupby('subject_id')['importance_ratio'].cumprod()
+
+    # Calculate discounted rewards for each step and then sum them up to get the cumulative return per trajectory
+    df_copy['discounted_reward'] = (gamma ** df_copy.groupby('subject_id').cumcount()) * reward
+    cumulative_returns_per_patient = df_copy.groupby('subject_id')['discounted_reward'].sum()
+
+    # Weight the cumulative returns by the cumulative importance ratios calculated at the last step of each trajectory
+    last_step_importance_ratios = df_copy.groupby('subject_id')['cumulative_importance'].last()
+    weighted_cumulative_returns = cumulative_returns_per_patient * last_step_importance_ratios
+
+    # Normalize the weighted cumulative returns by the mean of the last step importance ratios across all patients
+    mean_last_step_importance_ratio = last_step_importance_ratios.mean()
+    normalized_weighted_cumulative_returns = weighted_cumulative_returns.mean() / mean_last_step_importance_ratio
+
+    return normalized_weighted_cumulative_returns
+
+def bootstrap_wis_ai(data, gamma, reward, calculate_wis_ai_per_patient, n_iterations=1000, sample_size_ratio=1, ci=0.95):
+    np.random.seed(0)
+    unique_subject_ids = data['subject_id'].unique()
+    sample_size = int(len(unique_subject_ids) * sample_size_ratio)
+    bootstrap_wis_scores = []
+
+    for _ in range(n_iterations):
+        # Bootstrap sampling
+        sampled_subject_ids = np.random.choice(unique_subject_ids, size=sample_size, replace=True)
+        sampled_data = data[data['subject_id'].isin(sampled_subject_ids)]
+
+        # Calculate WIS for this sample
+        wis_score = calculate_wis_ai_per_patient(sampled_data, gamma, reward)
+        bootstrap_wis_scores.append(wis_score)
+
+    # bootstrap + IC95%
+    boot_mean = np.mean(bootstrap_wis_scores)
+    lower_bound = np.percentile(bootstrap_wis_scores, (1 - ci) / 2 * 100)
+    upper_bound = np.percentile(bootstrap_wis_scores, (1 + ci) / 2 * 100)
+
+    return boot_mean, lower_bound, upper_bound  
+
+
+def calculate_wis_clinician_per_patient(df, gamma, reward):
+    df_copy = df.copy()
+
+    # Since we're evaluating the clinician policy, the importance ratios are all 1
+    # Hence, every step in each patient trajectory contributes equally to the cumulative return
+    df_copy['cumulative_importance'] = 1  # This is constant as we are evaluating the behavior policy itself
+
+    # Calculate discounted rewards for each step and then sum them up to get the cumulative return per trajectory
+    df_copy['discounted_reward'] = (gamma ** df_copy.groupby('subject_id').cumcount()) * reward
+    cumulative_returns_per_patient = df_copy.groupby('subject_id')['discounted_reward'].sum()
+
+    # Since the importance ratios are all 1, the weighted returns are just the cumulative returns
+    # No need to multiply by 'cumulative_importance' here as it's always 1
+
+    # The mean of weighted returns across all patients is simply the mean of cumulative_returns_per_patient
+    # No need to normalize by the mean of weights (cumulative importance ratios) since they are all 1
+    normalized_mean_weighted_returns = cumulative_returns_per_patient.mean()
+
+    # Return the mean for all patients' trajectories
+    return normalized_mean_weighted_returns
+
+def bootstrap_wis_behavior(data, gamma, reward, calculate_wis_clinician_per_patient, n_iterations=1000,
+                           sample_size_ratio=1, ci=0.95):
+    #np.random.seed(0)
+    unique_subject_ids = data['subject_id'].unique()
+    sample_size = int(len(unique_subject_ids) * sample_size_ratio)
+    bootstrap_wis_scores = []
+
+    for _ in range(n_iterations):
+        sampled_subject_ids = np.random.choice(unique_subject_ids, size=sample_size, replace=True)
+        sampled_data = data[data['subject_id'].isin(sampled_subject_ids)]
+
+        # Calculate the WIS for this sample
+        wis_score = calculate_wis_clinician_per_patient(sampled_data, gamma, reward)
+        bootstrap_wis_scores.append(wis_score)
+
+    # mean of WIS and CI95
+    boot_mean = np.mean(bootstrap_wis_scores)
+    lower_bound = np.percentile(bootstrap_wis_scores, (1 - ci) / 2 * 100)
+    upper_bound = np.percentile(bootstrap_wis_scores, (1 + ci) / 2 * 100)
+
+    return boot_mean, lower_bound, upper_bound
+
+
+np.random.seed(0)
+
+# Execute existing bootstraps
+wis_mean_rl, wis_ci_lower_rl, wis_ci_upper_rl = bootstrap_wis_ai(
+    test_data_with_behavior_proba, gamma, reward, calculate_wis_ai_per_patient
+)
+
+wis_mean_clinician, wis_ci_lower_clinician, wis_ci_upper_clinician = bootstrap_wis_behavior(
+    test_data_with_behavior_proba, gamma, reward, calculate_wis_clinician_per_patient
+)
+
+
+wis_rl_samples = bootstrap_wis_ai(
+    test_data_with_behavior_proba, gamma, reward, calculate_wis_ai_per_patient, n_iterations=1000
+)
+
+wis_clinician_samples = bootstrap_wis_behavior(
+    test_data_with_behavior_proba, gamma, reward, calculate_wis_clinician_per_patient, n_iterations=1000
+)
+
+# Compute the absolute difference of the bootstrapped samples
+wis_diff_samples = np.array(np.array(wis_rl_samples) - np.array(wis_clinician_samples))
+
+# Compute the mean and the 95% confidence interval (2.5% - 97.5%)
+wis_diff_mean = np.mean(wis_diff_samples)
+wis_diff_ci_lower, wis_diff_ci_upper = np.percentile(wis_diff_samples, [2.5, 97.5])
+
+# Final display of results
+print("\n=== WIS Results ===")
+print(f"WIS RL: {wis_mean_rl:.4f} (IC95%: [{wis_ci_lower_rl:.4f}, {wis_ci_upper_rl:.4f}])")
+print(f"WIS Clinician: {wis_mean_clinician:.4f} (IC95%: [{wis_ci_lower_clinician:.4f}, {wis_ci_upper_clinician:.4f}])")
+print(f"WIS Difference: {wis_diff_mean:.4f} (IC95%: [{wis_diff_ci_lower:.4f}, {wis_diff_ci_upper:.4f}])")
