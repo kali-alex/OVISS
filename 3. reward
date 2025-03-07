@@ -1,0 +1,46 @@
+def calculate_corrected_future_averages(df, hours=4, columns=['lactate', 'mbp', 'norepinephrine','sofa']):
+    """
+    Calculate the correct average of future values over the specified number of hours for each row in the dataframe.
+    """
+    for col in columns:
+        # Shift the column to exclude the current value and then calculate the rolling mean
+        df[f'{col}_future_avg_{hours}h'] = df.groupby('subject_id')[col].shift(-1).rolling(window=hours, min_periods=1).mean().shift(1-hours)
+    return df
+
+def calculate_adjusted_reward(df, benefits):
+    """
+    Calculate the adjusted reward for each row in the dataframe based on survival and benefits, and penalize for death.
+    """
+    # Base reward of 1 for survival
+    reward = pd.Series(1, index=df.index)
+
+    # Death condition
+    death_condition = df['death'] == 1
+    reward[death_condition] = -20  # High penalty for death
+
+    # Conditions for benefits
+    # Lactate condition (benefit for decreased lactate)
+    lactate_condition = ((df['death'] != 1) & (df['lactate_future_avg_6h'] < df['lactate']))
+    reward[lactate_condition] += benefits['lactate']
+
+    # MBP condition (benefit for increased MBP)
+    mbp_condition = ((df['death'] != 1) & (df['mbp_future_avg_4h'] >= 65) & (df['mbp'] < 65))
+    reward[mbp_condition] += benefits['mbp']
+
+    # SOFA condition (benefit for decreased SOFA)
+    sofa_condition = ((df['death'] != 1) & (df['sofa_future_avg_6h'] < df['sofa']))
+    reward[sofa_condition] += benefits['sofa']
+
+    # Norepinephrine condition (benefit for decreased norepinephrine)
+    norepi_condition = ((df['death'] != 1) & (df['norepinephrine_future_avg_4h'] < df['norepinephrine']))
+    reward[norepi_condition] += benefits['norepinephrine']
+
+    return reward
+
+# Define benefit values (these can be adjusted)
+benefits = {
+    'lactate': 1,       # benefit for decreased lactate
+    'mbp': 1,           # benefit for higher MBP
+    'sofa': 3,          # benefit for decreased SOFA
+    'norepinephrine': 1 # benefit for decreased norepinephrine
+}
