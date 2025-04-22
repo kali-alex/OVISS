@@ -1,0 +1,226 @@
+# sepsis 3
+SELECT se.subject_id, se.stay_id, se.suspected_infection_time
+FROM `physionet-data.mimic_derived.sepsis3` se
+WHERE se.sofa_score >= 2 and se.sepsis3 = TRUE
+QUALIFY ROW_NUMBER() OVER (PARTITION BY se.subject_id ORDER BY se.suspected_infection_time ASC) = 1
+
+# 24h 
+SELECT se.subject_id, se.stay_id, se.suspected_infection_time, de.icu_intime
+FROM `focus-poet-332920.sepsis_jean.mimic_1` se
+left join `physionet-data.mimic_derived.icustay_detail` de
+ON se.stay_id = de.stay_id
+WHERE se.suspected_infection_time BETWEEN de.icu_intime - INTERVAL 24 HOUR
+                                     AND de.icu_intime + INTERVAL 24 HOUR;
+
+
+# NE first between 0 and 24h and >= 2 infusions
+WITH first_norepi AS (
+
+
+   SELECT
+       de.stay_id,
+       MIN(de.starttime) AS first_norepi_time
+   FROM `physionet-data.mimic_derived.norepinephrine_equivalent_dose` de
+   GROUP BY de.stay_id
+),
+norepi_count AS (
+
+
+   SELECT
+       de.stay_id,
+       COUNT(de.starttime) AS norepi_events
+   FROM `physionet-data.mimic_derived.norepinephrine_equivalent_dose` de
+   JOIN `focus-poet-332920.sepsis_jean.mimic_2` se
+   ON de.stay_id = se.stay_id
+   WHERE de.starttime BETWEEN se.icu_intime AND se.icu_intime + INTERVAL 7 DAY
+   GROUP BY de.stay_id
+)
+SELECT
+   se.subject_id,
+   se.stay_id,
+   se.suspected_infection_time,
+   se.icu_intime,
+   fn.first_norepi_time,
+   nc.norepi_events
+FROM `focus-poet-332920.sepsis_jean.mimic_2` se
+LEFT JOIN first_norepi fn ON se.stay_id = fn.stay_id
+LEFT JOIN norepi_count nc ON se.stay_id = nc.stay_id
+WHERE fn.first_norepi_time BETWEEN se.icu_intime AND se.icu_intime + INTERVAL 24 HOUR
+AND nc.norepi_events >= 2;  
+
+
+
+# lactate > 2
+select se.subject_id, se.stay_id, se.suspected_infection_time, se.icu_intime, se.first_norepi_time, se.norepi_events, de.lactate_max
+from `focus-poet-332920.sepsis_jean.mimic_3` se
+left join `physionet-data.mimic_derived.first_day_bg_art` de
+on se.subject_id = de.subject_id
+where lactate_max >= 2
+
+# NE and vaso
+SELECT
+   se.subject_id,
+   se.stay_id,
+   se.suspected_infection_time,
+   se.icu_intime,
+   se.first_norepi_time,
+   se.norepi_events,
+   se.lactate_max,
+   de.starttime,
+   de.endtime,
+   de.norepinephrine,
+   de.vasopressin
+FROM `focus-poet-332920.sepsis_jean.mimic_4` se
+LEFT JOIN `physionet-data.mimic_derived.vasoactive_agent` de
+ON se.stay_id = de.stay_id
+WHERE (de.norepinephrine IS NOT NULL OR de.vasopressin IS NOT NULL)
+AND de.starttime BETWEEN se.icu_intime AND se.icu_intime + INTERVAL 7 DAY
+ORDER BY
+   se.stay_id,
+   se.suspected_infection_time,
+   se.first_norepi_time,
+   de.starttime ASC;
+
+
+# stay
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.gender, de.dod, de.admission_age, de.hospital_expire_flag, de.los_hospital, de.los_icu
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.icustay_detail` de
+on se.stay_id = de.stay_id
+
+# bg
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.so2, de.po2, de.fio2, de.pao2fio2ratio, de.hemoglobin, de.temperature, de.lactate
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.bg` de
+on se.subject_id = de.subject_id
+where specimen like '%ART%'
+AND de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+# wbc
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.wbc
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.blood_differential` de
+on se.subject_id = de.subject_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+# bun and creat
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.bun, de.creatinine
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.chemistry` de
+on se.subject_id = de.subject_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+# inr
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.inr
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.coagulation` de
+on se.subject_id = de.subject_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+# blood count
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.hemoglobin, de.platelet, de.wbc
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.complete_blood_count` de
+on se.subject_id = de.subject_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+# bili
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.bilirubin_total
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.enzyme` de
+on se.subject_id = de.subject_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+# gcs
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.gcs
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.gcs` de
+on se.subject_id = de.subject_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 1 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+# height
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.height
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.height` de
+on se.subject_id = de.subject_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 1 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+# rrt
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.dialysis_present, de.dialysis_active
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.rrt` de
+on se.stay_id = de.stay_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+                     and de.dialysis_present = 1
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+
+
+# uo
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.uo_mlkghr_6hr, de.uo_mlkghr_12hr, de.uo_mlkghr_24hr
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.urine_output_rate` de
+on se.stay_id = de.stay_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+
+# mbp
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.charttime, de.mbp, de.mbp_ni
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.vitalsign` de
+on se.stay_id = de.stay_id
+where de.charttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.charttime ASC
+
+# weight
+SELECT se.subject_id, se.stay_id, se.first_norepi_time, de.starttime, de.weight
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+left join `physionet-data.mimic_derived.weight_durations` de
+on se.stay_id = de.stay_id
+where de.starttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                    AND se.first_norepi_time + INTERVAL 6 DAY
+order by se.subject_id, se.stay_id, se.first_norepi_time, de.starttime ASC
+
+
+
+
+# fluid
+SELECT
+ se.subject_id,
+ se.stay_id,
+ se.first_norepi_time,
+ ip.starttime,
+ ip.endtime,
+ ip.itemid,
+ ip.amount,
+ ip.totalamount,
+ ip.ordercategoryname,
+ ip.ordercategorydescription,
+ ip.patientweight
+FROM `focus-poet-332920.sepsis_jean.mimic_id` se
+LEFT JOIN `physionet-data.mimic_icu.inputevents` ip
+ON se.stay_id = ip.stay_id
+where ip.starttime BETWEEN se.first_norepi_time - INTERVAL 1 DAY
+                     AND se.first_norepi_time + INTERVAL 6 DAY
+AND ip.ordercategoryname like '%03-%'
+OR ip.ordercategoryname like '%04-%'
+ORDER BY se.subject_id, ip.starttime ASC
